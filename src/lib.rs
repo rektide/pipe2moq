@@ -249,14 +249,15 @@ impl Pipe2Moq {
         config: MoqConfig,
         frame_receiver: &mut mpsc::Receiver<(Bytes, u64)>,
     ) -> Result<()> {
-        info!("Connecting to MoQ relay at {}", config.relay_url);
+        info!("Creating MoQ origin for relay at {}", config.relay_url);
 
-        let client = moq_native::Client::new(moq_native::ClientConfig::default())?;
+        let origin = moq_native::moq_lite::Origin::produce();
+        let client = moq_native::Client::new(moq_native::ClientConfig::default())?
+            .with_publish(origin.consumer);
         let url = Url::parse(&config.relay_url)?;
         let _session = client.connect(url).await?;
         info!("Connected to MoQ relay");
 
-        let origin = moq_native::moq_lite::Origin::produce();
         let mut broadcast = origin.producer.create_broadcast(&config.broadcast_path)
             .expect("Failed to create broadcast");
 
