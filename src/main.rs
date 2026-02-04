@@ -1,6 +1,7 @@
 use anyhow::Result;
-use clap::Parser;
-use figment::{Figment, providers::{Env, Format, Toml}};
+use clap::{Parser, Subcommand, CommandFactory};
+use clap_complete::{generate, Shell};
+use figment2::{Figment, providers::{Env, Format, Toml}};
 use pipe2moq::{Pipe2Moq, PipelineConfig, AudioConfig, MoqConfig};
 use tracing_subscriber::{EnvFilter, fmt};
 use std::path::PathBuf;
@@ -9,6 +10,9 @@ use std::path::PathBuf;
 #[command(name = "pipe2moq")]
 #[command(about = "Low-latency audio streaming from PipeWire to MoQ", long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     #[arg(short, long, default_value = "config.toml")]
     config: PathBuf,
 
@@ -38,6 +42,15 @@ struct Args {
 
     #[arg(long, action)]
     verbose: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Generate shell completions
+    Completions {
+        #[arg(short, long)]
+        shell: Shell,
+    },
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -91,6 +104,12 @@ struct PipelineFileConfig {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    if let Some(Commands::Completions { shell }) = args.command {
+        let mut cmd = Args::command();
+        generate(shell, &mut cmd, "pipe2moq", &mut std::io::stdout());
+        return Ok(());
+    }
 
     let filter = if args.verbose {
         EnvFilter::new("debug")
