@@ -40,6 +40,9 @@ struct Args {
     #[arg(long)]
     complexity: Option<u32>,
 
+    #[arg(long)]
+    frame_size: Option<u32>,
+
     #[arg(long, action)]
     verbose: bool,
 }
@@ -87,8 +90,6 @@ struct AudioFileConfig {
     complexity: Option<u32>,
     #[serde(default)]
     frame_size: Option<u32>,
-    #[serde(default)]
-    max_ptime: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -147,7 +148,6 @@ async fn main() -> Result<()> {
         application: config.audio.application.unwrap_or_else(|| "voip".to_string()),
         complexity: args.complexity.or(config.audio.complexity).unwrap_or(5),
         frame_size: config.audio.frame_size.unwrap_or(20),
-        max_ptime: config.audio.max_ptime.unwrap_or(20),
     };
 
     let sink_name = args.sink_name.or(config.pipeline.sink_name);

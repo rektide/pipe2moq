@@ -7,10 +7,9 @@ track_name = "audio"
 sample_rate = 48000
 channels = 2
 bitrate = 96000
-application = "voip"
+application = "generic"
 complexity = 5
 frame_size = 20
-max_ptime = 20
 
 [pipeline]
 buffer_time = 20000

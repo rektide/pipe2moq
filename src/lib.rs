@@ -17,7 +17,6 @@ pub struct AudioConfig {
     pub application: String,
     pub complexity: u32,
     pub frame_size: u32,
-    pub max_ptime: u32,
 }
 
 impl Default for AudioConfig {
@@ -26,10 +25,9 @@ impl Default for AudioConfig {
             sample_rate: 48000,
             channels: 2,
             bitrate: 96000,
-            application: "voip".to_string(),
+            application: "generic".to_string(),
             complexity: 5,
             frame_size: 20,
-            max_ptime: 20,
         }
     }
 }
@@ -144,8 +142,8 @@ impl Pipe2Moq {
 
         let pulsesrc = gst::ElementFactory::make("pulsesrc")
             .property("device", &source_device)
-            .property("buffer-time", config.buffer_time as i32)
-            .property("latency-time", config.latency_time as i32)
+            .property("buffer-time", config.buffer_time as i64)
+            .property("latency-time", config.latency_time as i64)
             .build()?;
 
         let capsfilter = gst::ElementFactory::make("capsfilter")
@@ -160,10 +158,9 @@ impl Pipe2Moq {
 
         let opusenc = gst::ElementFactory::make("opusenc")
             .property("bitrate", config.audio.bitrate as i32)
-            .property("application", &config.audio.application)
+            .property_from_str("audio-type", if config.audio.application == "voice" { "voice" } else { "generic" })
             .property("complexity", config.audio.complexity as i32)
-            .property("frame-size", config.audio.frame_size as i32)
-            .property("max-ptime", config.audio.max_ptime as i32)
+            .property_from_str("frame-size", &config.audio.frame_size.to_string())
             .build()?;
 
         let appsink = AppSink::builder()
