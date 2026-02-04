@@ -1,0 +1,17 @@
+[relay]
+url = "https://localhost:4443/anon"
+broadcast_path = "/live/audio.hang"
+track_name = "audio"
+
+[audio]
+sample_rate = 48000
+channels = 2
+bitrate = 96000
+application = "voip"
+complexity = 5
+frame_size = 20
+max_ptime = 20
+
+[pipeline]
+buffer_time = 20000
+latency_time = 10000
