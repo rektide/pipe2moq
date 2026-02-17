@@ -1,6 +1,6 @@
 [relay]
 url = "https://localhost:4443/anon"
-broadcast_path = "/live/audio.hang"
+broadcast_path = "/live/audio"
 track_name = "audio"
 
 [audio]

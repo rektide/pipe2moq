@@ -33,7 +33,6 @@ Pipe2MoQ captures audio from the default PipeWire sink, encodes it using Opus, a
                ▼
 ┌─────────────────────────────────┐
 │   MoQ Publisher (Rust)          │
-│   + hang (catalog, container)   │
 │   + moq-lite (transport)        │
 └──────┬──────────────────────────┘
        │
@@ -70,7 +69,7 @@ Create a `config.toml` file:
 ```toml
 [relay]
 url = "https://localhost:4443/anon"
-broadcast_path = "/live/audio.hang"
+broadcast_path = "/live/audio"
 track_name = "audio"
 
 [audio]

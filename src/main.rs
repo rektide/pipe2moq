@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
 
     let broadcast_path = args.broadcast_path
         .or_else(|| if config.relay.broadcast_path.is_empty() { None } else { Some(config.relay.broadcast_path) })
-        .unwrap_or_else(|| "/live/audio.hang".to_string());
+        .unwrap_or_else(|| "/live/audio".to_string());
 
     let track_name = args.track_name
         .or_else(|| if config.relay.track_name.is_empty() { None } else { Some(config.relay.track_name) })

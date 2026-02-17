@@ -60,7 +60,7 @@ echo ""
 
 # Configuration
 RELAY_URL="${RELAY_URL:-http://localhost:4443/anon}"
-BROADCAST_PATH="${BROADCAST_PATH:-/test/audio.hang}"
+BROADCAST_PATH="${BROADCAST_PATH:-/test/audio}"
 TRACK_NAME="${TRACK_NAME:-audio}"
 
 echo "Configuration:"
@@ -181,7 +181,7 @@ case "${1:-help}" in
         echo ""
         echo "Environment variables:"
         echo "  RELAY_URL      - MoQ relay URL (default: http://localhost:4443/anon)"
-        echo "  BROADCAST_PATH  - Broadcast namespace (default: /test/audio.hang)"
+        echo "  BROADCAST_PATH  - Broadcast namespace (default: /test/audio)"
         echo "  TRACK_NAME      - Track name (default: audio)"
         echo ""
         echo "Examples:"
