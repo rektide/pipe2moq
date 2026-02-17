@@ -38,7 +38,7 @@ Additional terms defined by this document:
 
 ## 3. TARGET_PLAYTIME Extension Header
 
-The TARGET_PLAYTIME extension (Extension Header Type 0xE2) is an Object Extension. It expresses the absolute wall-clock time in nanoseconds since the Unix epoch when the media object should be presented to the output device.
+The TARGET_PLAYTIME extension (Extension Header Type 0xE3) is an Object Extension. It expresses the absolute wall-clock time in nanoseconds since the Unix epoch when the media object should be presented to the output device.
 
 TARGET_PLAYTIME only applies to Objects, not Tracks.
 
@@ -46,13 +46,13 @@ TARGET_PLAYTIME only applies to Objects, not Tracks.
 
 ```
 TARGET_PLAYTIME {
-  Type (0xE2),
+  Type (0xE3),
   Length (i),
   Timestamp (..)
 }
 ```
 
-**Type**: The extension header type 0xE2. Since 0xE2 is odd, the Key-Value-Pair encoding includes a Length field.
+**Type**: The extension header type 0xE3. Since 0xE3 is odd, the Key-Value-Pair encoding includes a Length field.
 
 **Length**: A variable-length integer specifying the length of the Timestamp field in bytes. MUST be 8.
 
@@ -136,7 +136,7 @@ This document requests registration of the following extension header in the "MO
 +========+================+========+===============+
 | Type   | Name           | Scope  | Specification |
 +========+================+========+===============+
-| 0xE2   | TARGET_PLAYTIME| Object | Section 3     |
+| 0xE3   | TARGET_PLAYTIME| Object | Section 3     |
 +--------+----------------+--------+---------------+
 ```
 
@@ -162,51 +162,14 @@ This document requests registration of the following extension header in the "MO
 
 ---
 
-## Appendix A. Rationale for Design Choices
+## Appendix A. Example Usage
 
-### A.1. Type Code Selection
-
-The type code 0xE2 (226) was selected because:
-
-1. Falls in range 64-16383 (0x40-0x3FFF) for standards utilization where space is less of a concern
-2. Not allocated in current IANA registry for MoQ Extension Headers
-3. Odd number results in Length-prefixed encoding, which is required for the 8-byte timestamp value
-4. Easy to recognize in hex dumps
-
-### A.2. Nanosecond Precision
-
-Nanosecond precision was chosen over microseconds or milliseconds to support:
-
-- Audio synchronization at high sample rates (48kHz = ~20.8μs per sample)
-- Multi-track alignment (audio/video lip sync requires <10ms precision)
-- Future support for high-frame-rate video (120fps = ~8.3ms per frame)
-
-### A.3. Signed 64-bit Encoding
-
-A signed 64-bit integer was chosen because:
-
-- Covers ±292 years from Unix epoch in nanoseconds
-- Represents years 1677 to 2262
-- Matches common system time representations (POSIX timespec)
-- Allows for pre-1970 timestamps if needed (e.g., historical content)
-
-### A.4. Big-Endian Byte Order
-
-Big-endian (network byte order) was chosen for consistency with:
-- QUIC varint encoding (big-endian)
-- Standard network protocol conventions
-- Ease of implementation on both little-endian and big-endian systems
-
----
-
-## Appendix B. Example Usage
-
-### B.1. Publisher Implementation (Rust)
+### A.1. Publisher Implementation (Rust)
 
 ```rust
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const TARGET_PLAYTIME_TYPE: u64 = 0xE2;
+const TARGET_PLAYTIME_TYPE: u64 = 0xE3;
 const GLOBAL_DELAY_NS: i64 = 200_000_000; // 200ms
 
 fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
@@ -232,12 +195,12 @@ fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
 }
 ```
 
-### B.2. Consumer Implementation (Rust)
+### A.2. Consumer Implementation (Rust)
 
 ```rust
-use std::time::{SystemTime, UNIX_EIGHT};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-const TARGET_PLAYTIME_TYPE: u64 = 0xE2;
+const TARGET_PLAYTIME_TYPE: u64 = 0xE3;
 const OUTPUT_LATENCY_NS: i64 = 10_000_000; // 10ms speaker latency
 
 fn process_frame(object: SubgroupObjectExt) -> Duration {
@@ -267,12 +230,12 @@ fn process_frame(object: SubgroupObjectExt) -> Duration {
 }
 ```
 
-### B.3. Wire Encoding Example
+### A.3. Wire Encoding Example
 
 For TARGET_PLAYTIME = 1708234567890123456 ns (2024-02-18 02:36:07.890123456 UTC):
 
 ```
-E2                // Type: 0xE2 (delta from 0)
+E3                // Type: 0xE3 (delta from 0)
 08                // Length: 8 bytes
 17 AC 3F 2D       // Timestamp (big-endian)...
 D5 04 12 30       // ...continued
