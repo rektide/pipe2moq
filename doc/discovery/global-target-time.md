@@ -1,148 +1,207 @@
-# TARGET_PLAYTIME Extension Header Specification
-
-A MoQ Transport extension header for synchronized multi-consumer playback.
-
----
+# TARGET_PLAYTIME Extension Header for Media over QUIC
 
 ## Abstract
 
-This document specifies the `TARGET_PLAYTIME` extension header for Media over QUIC Transport (MOQT). The extension provides wall-clock timing information for media objects, enabling synchronized playback across multiple consumers with different network latencies and output hardware.
+This document specifies the TARGET_PLAYTIME extension header for Media over QUIC Transport (MOQT). The extension provides absolute wall-clock timing information for media objects, enabling synchronized playback across multiple consumers with different network latencies and output hardware.
+
+## Status of This Memo
+
+This is an application-defined extension header specification. It is not part of the IETF MoQ Transport standard but follows the extension header conventions defined in [I-D.ietf-moq-transport].
 
 ---
 
-# Journal - Specification Development
+## 1. Introduction
 
-## Design Goals
+Media over QUIC Transport (MOQT) is a publish/subscribe protocol for media distribution. The base protocol uses relative timestamps embedded in media containers (e.g., the hang container format) for presentation timing. However, relative timestamps require correlation between track time and wall-clock time, which complicates synchronized multi-consumer scenarios.
 
-1. **Synchronized playback**: Multiple consumers play at the same wall-clock time
-2. **Fixed global delay**: All consumers use a common delay buffer
-3. **Per-consumer calibration**: Each consumer accounts for its own output latency
-4. **Relay visibility**: Relays see (but don't modify) timing information
-5. **Backward compatibility**: Unknown extensions are forwarded unchanged
+This document defines the TARGET_PLAYTIME extension header, which carries an absolute Unix epoch timestamp indicating when a media object should be presented. This enables:
+
+- **Synchronized playback**: Multiple consumers play at the same wall-clock time
+- **Fixed global delay**: Publishers set a common delay buffer
+- **Per-consumer calibration**: Each consumer accounts for its own output latency
 
 ---
 
-# Specification
+## 2. Terminology
 
-## TARGET_PLAYTIME Extension Header
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all capitals, as shown here.
 
-**Extension Header Type:** `0xE2` (226)  
-**Scope:** Object  
-**Value Format:** Length-prefixed bytes (Type is odd)  
-**Value Size:** 8 bytes (signed 64-bit integer)
+This document uses terminology from [I-D.ietf-moq-transport], including:
+- **Object**: An addressable unit whose payload is a sequence of bytes
+- **Original Publisher**: The initial publisher of a given track
+- **Relay**: An entity that is both a Publisher and a Subscriber
 
-### Value Semantics
+Additional terms defined by this document:
+- **Target Playtime**: The absolute wall-clock time when an object's payload should be presented to the output device
 
-TARGET_PLAYTIME contains a 64-bit signed integer representing the Unix epoch timestamp in **nanoseconds** when the media object should be played (presented to the output device).
+---
+
+## 3. TARGET_PLAYTIME Extension Header
+
+The TARGET_PLAYTIME extension (Extension Header Type 0xE2) is an Object Extension. It expresses the absolute wall-clock time in nanoseconds since the Unix epoch when the media object should be presented to the output device.
+
+TARGET_PLAYTIME only applies to Objects, not Tracks.
+
+### 3.1. Wire Format
 
 ```
 TARGET_PLAYTIME {
   Type (0xE2),
-  Length (0x08),
-  Timestamp (i64)  // signed 64-bit, nanoseconds since Unix epoch
+  Length (i),
+  Timestamp (..)
 }
 ```
 
-The timestamp value:
-- **Positive values**: Nanoseconds since 1970-01-01 00:00:00 UTC
-- **Negative values**: Nanoseconds before 1970-01-01 00:00:00 UTC (unlikely in practice)
-- **Zero**: Unix epoch (1970-01-01 00:00:00 UTC)
+**Type**: The extension header type 0xE2. Since 0xE2 is odd, the Key-Value-Pair encoding includes a Length field.
 
-### Wire Format
+**Length**: A variable-length integer specifying the length of the Timestamp field in bytes. MUST be 8.
 
-Since Type `0xE2` is odd, the Key-Value-Pair encoding includes a Length field:
+**Timestamp**: An 8-byte signed 64-bit integer in big-endian byte order, representing nanoseconds since the Unix epoch (1970-01-01 00:00:00 UTC). Positive values represent times after the epoch; negative values represent times before the epoch.
+
+### 3.2. Semantics
+
+The TARGET_PLAYTIME indicates the absolute wall-clock time when this object's payload should be presented to the output device (e.g., speakers for audio, display for video).
+
+**Publishers** set TARGET_PLAYTIME to the capture time plus a fixed global delay:
 
 ```
-Key-Value-Pair {
-  Delta Type (i),     // Encoded as varint, delta from previous type
-  Length (i),         // Always 0x08 (8 bytes) for TARGET_PLAYTIME
-  Value (8 bytes)     // Signed 64-bit integer, big-endian
-}
+target_playtime = capture_time + global_delay
 ```
 
-### Semantics
+Where:
+- `capture_time`: Wall-clock time when media was captured
+- `global_delay`: Application-defined buffer (e.g., 200ms)
 
-The TARGET_PLAYTIME indicates the **absolute wall-clock time** when this object's payload should be presented to the output device (e.g., speakers for audio, display for video).
+**Consumers** use TARGET_PLAYTIME to determine playback timing:
 
-**Consumers** use TARGET_PLAYTIME to:
-1. Determine when to play each frame
-2. Calculate clock offset from the publisher
-3. Measure end-to-end latency
-4. Implement jitter buffers with precise timing
+```
+wait_duration = target_playtime - output_latency - current_time
+```
 
-**Publishers** set TARGET_PLAYTIME to:
-1. The capture time plus a fixed global delay
-2. Account for encoding latency in the timestamp
+Where:
+- `output_latency`: Consumer's hardware output latency (e.g., 10ms speaker latency)
+- `current_time`: Consumer's current wall-clock time
 
-**Relays** MUST:
-1. Preserve TARGET_PLAYTIME unchanged
-2. Cache it with the object
-3. Forward it to subscribers
+Consumers SHOULD implement jitter buffering based on TARGET_PLAYTIME values to handle network latency variations.
 
-### Processing Rules
+### 3.3. Validity Constraints
 
-| Entity | Can Add | Can Modify | Can Remove | Notes |
-|--------|---------|------------|------------|-------|
-| Original Publisher | YES | YES (before publish) | YES (before publish) | Owns the timestamp |
-| Relay | NO | NO | NO | Must preserve unchanged |
-| Subscriber | N/A | N/A | N/A | Reads only |
+TARGET_PLAYTIME, if present, MUST contain exactly 8 bytes. If an endpoint receives a TARGET_PLAYTIME with a Length field other than 8, it MUST close the session with PROTOCOL_VIOLATION.
 
-### Malformed Conditions
+A Track is considered malformed (see Section 2.4.2 of [I-D.ietf-moq-transport]) if any of the following conditions are detected:
 
-A Track is considered malformed (see [Section 2.4.2 of draft-ietf-moq-transport](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/)) if any of the following conditions are detected:
+* An Object contains more than one instance of TARGET_PLAYTIME.
+* TARGET_PLAYTIME Length field is not exactly 8 bytes.
+* The Timestamp bytes cannot be decoded as a valid signed 64-bit integer.
 
-1. An Object contains more than one instance of TARGET_PLAYTIME.
-2. TARGET_PLAYTIME Length field is not exactly 8 bytes.
-3. TARGET_PLAYTIME timestamp is not monotonically increasing within a Group (for real-time streams).
-4. TARGET_PLAYTIME timestamp is unreasonably far in the past or future (implementation-defined threshold).
+This extension is optional. Publishers that do not support TARGET_PLAYTIME will not include it. Consumers that do not support TARGET_PLAYTIME MUST ignore it and rely on container-level timestamps if available.
 
-### Caching and Forwarding
+### 3.4. Processing Rules
 
-Relays MUST cache TARGET_PLAYTIME as part of the Object metadata. If the Object is cached, TARGET_PLAYTIME MUST be preserved and included when the Object is forwarded.
+```
++===================+==========+==========+==========+
+| Entity            | Can Add  | Can Mod  | Can Rem  |
++===================+==========+==========+==========+
+| Original Publisher| YES      | YES      | YES      |
++-------------------+----------+----------+----------+
+| Relay             | NO       | NO       | NO       |
++-------------------+----------+----------+----------+
+```
+
+The TARGET_PLAYTIME extension can be added by the Original Publisher but MUST NOT be added by Relays. This extension MUST NOT be modified or removed by Relays.
+
+### 3.5. Caching and Forwarding
+
+Relays MUST preserve TARGET_PLAYTIME unchanged. Relays MUST cache TARGET_PLAYTIME as part of the Object metadata and MUST forward it to subscribers.
 
 Relays MUST NOT attempt to modify TARGET_PLAYTIME based on their local clock or any other criteria.
 
 ---
 
-# Journal - Encoding Details
+## 4. Security Considerations
 
-## Why 64-bit Signed?
+**Clock Manipulation**: Malicious publishers could set unreasonable timestamps (e.g., far future or past). Consumers SHOULD validate that received timestamps are within an acceptable range and reject objects with timestamps too far from the current time.
 
-| Format | Range | Precision | Notes |
-|--------|-------|-----------|-------|
-| Unsigned 62-bit varint | 0 to ~4.6×10^18 | - | MoQ native format, but no negatives |
-| Unsigned 64-bit | 0 to ~1.8×10^19 | - | Can't represent pre-1970 |
-| **Signed 64-bit** | ±9.2×10^18 | - | Full Unix timestamp range |
+**Replay Attacks**: Objects with timestamps in the past could be replayed by attackers. Consumers SHOULD reject objects with TARGET_PLAYTIME values significantly in the past (e.g., more than the global delay threshold).
 
-**Nanosecond precision** is required for:
-- Audio synchronization (samples at 48kHz = ~20μs per sample)
-- Video frame timing (at 60fps = ~16.7ms per frame)
-- Multi-track alignment (audio/video sync)
+**Timing Attacks**: Precise timestamps could reveal information about the publisher's clock synchronization or location. Applications with privacy requirements SHOULD consider adding small random jitter to timestamps.
 
-**Range with nanoseconds**:
-- 64-bit signed nanoseconds covers ±292 years from Unix epoch
-- Years 1677 to 2262 are representable
+---
 
-## Wire Encoding
+## 5. IANA Considerations
 
-Since `0xE2` is odd, we use length-prefixed encoding:
+This document requests registration of the following extension header in the "MOQ Extension Headers" registry:
 
 ```
-Example: TARGET_PLAYTIME = 1708234567890123456 ns
-         (2024-02-18 02:36:07.890123456 UTC)
-
-Hex bytes (assuming this is the first extension, delta from 0):
-  E2          // Type 0xE2 (delta from 0)
-  08          // Length: 8 bytes
-  17 AC 3F 2D // Timestamp bytes (big-endian)...
-  D5 04 12 30 // ...continued
++========+================+========+===============+
+| Type   | Name           | Scope  | Specification |
++========+================+========+===============+
+| 0xE2   | TARGET_PLAYTIME| Object | Section 3     |
++--------+----------------+--------+---------------+
 ```
 
 ---
 
-# Journal - Usage Examples
+## 6. References
 
-## Publisher Implementation
+### 6.1. Normative References
+
+[I-D.ietf-moq-transport]
+:    Nandakumar, S., Vasiliev, V., Swett, I., and A. Frindell, "Media over QUIC Transport", Work in Progress, Internet-Draft, draft-ietf-moq-transport-16, January 2026.
+
+[RFC2119]
+:    Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, DOI 10.17487/RFC2119, March 1997.
+
+[RFC8174]
+:    Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174, May 2017.
+
+### 6.2. Informative References
+
+[draft-lcurley-moq-hang]
+:    Curley, L., "Media over QUIC - Hang", Work in Progress, Internet-Draft, draft-lcurley-moq-hang-01, November 2025.
+
+---
+
+## Appendix A. Rationale for Design Choices
+
+### A.1. Type Code Selection
+
+The type code 0xE2 (226) was selected because:
+
+1. Falls in range 64-16383 (0x40-0x3FFF) for standards utilization where space is less of a concern
+2. Not allocated in current IANA registry for MoQ Extension Headers
+3. Odd number results in Length-prefixed encoding, which is required for the 8-byte timestamp value
+4. Easy to recognize in hex dumps
+
+### A.2. Nanosecond Precision
+
+Nanosecond precision was chosen over microseconds or milliseconds to support:
+
+- Audio synchronization at high sample rates (48kHz = ~20.8μs per sample)
+- Multi-track alignment (audio/video lip sync requires <10ms precision)
+- Future support for high-frame-rate video (120fps = ~8.3ms per frame)
+
+### A.3. Signed 64-bit Encoding
+
+A signed 64-bit integer was chosen because:
+
+- Covers ±292 years from Unix epoch in nanoseconds
+- Represents years 1677 to 2262
+- Matches common system time representations (POSIX timespec)
+- Allows for pre-1970 timestamps if needed (e.g., historical content)
+
+### A.4. Big-Endian Byte Order
+
+Big-endian (network byte order) was chosen for consistency with:
+- QUIC varint encoding (big-endian)
+- Standard network protocol conventions
+- Ease of implementation on both little-endian and big-endian systems
+
+---
+
+## Appendix B. Example Usage
+
+### B.1. Publisher Implementation (Rust)
 
 ```rust
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -150,13 +209,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const TARGET_PLAYTIME_TYPE: u64 = 0xE2;
 const GLOBAL_DELAY_NS: i64 = 200_000_000; // 200ms
 
-fn publish_frame(payload: Vec<u8>, capture_time: SystemTime) {
-    let capture_ns = capture_time
+fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
+    let capture_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos() as i64;
     
-    // Target playtime = capture time + global delay
     let target_playtime = capture_ns + GLOBAL_DELAY_NS;
     
     let mut ext_headers = ExtensionHeaders::new();
@@ -165,218 +223,59 @@ fn publish_frame(payload: Vec<u8>, capture_time: SystemTime) {
         target_playtime.to_be_bytes().to_vec()
     );
     
-    // Create object with extension headers
-    let object = SubgroupObjectExt {
+    SubgroupObjectExt {
         object_id_delta: 0,
         extension_headers: ext_headers,
         payload_length: payload.len(),
         status: None,
-    };
-    // ... encode and send
-}
-```
-
-## Subscriber Implementation
-
-```rust
-use std::time::{SystemTime, UNIX_EPOCH};
-
-const TARGET_PLAYTIME_TYPE: u64 = 0xE2;
-const MY_OUTPUT_LATENCY_NS: i64 = 10_000_000; // 10ms speaker latency
-
-fn receive_frame(object: SubgroupObjectExt) {
-    // Extract TARGET_PLAYTIME
-    let target_playtime = object.extension_headers
-        .get(TARGET_PLAYTIME_TYPE)
-        .and_then(|kvp| kvp.bytes_value())
-        .map(|bytes| {
-            let arr: [u8; 8] = bytes.try_into().unwrap();
-            i64::from_be_bytes(arr)
-        });
-    
-    if let Some(target_ns) = target_playtime {
-        // Adjust for my output latency
-        let my_playtime = target_ns - MY_OUTPUT_LATENCY_NS;
-        
-        // Calculate when to play
-        let now_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-        
-        let wait_ns = my_playtime - now_ns;
-        
-        if wait_ns > 0 {
-            // Schedule playback
-            schedule_playback(wait_ns, object.payload);
-        } else {
-            // Late! Play immediately or drop
-            play_immediately(object.payload);
-        }
     }
 }
 ```
 
----
+### B.2. Consumer Implementation (Rust)
 
-# Journal - Comparison with Alternatives
+```rust
+use std::time::{SystemTime, UNIX_EIGHT};
 
-## Option 1: TARGET_PLAYTIME (This Specification)
+const TARGET_PLAYTIME_TYPE: u64 = 0xE2;
+const OUTPUT_LATENCY_NS: i64 = 10_000_000; // 10ms speaker latency
 
-| Aspect | Evaluation |
-|--------|------------|
-| Precision | Nanosecond - excellent |
-| Complexity | Medium - requires clock sync |
-| Relay impact | Minimal - pass-through |
-| Standardization | Application-defined initially |
+fn process_frame(object: SubgroupObjectExt) -> Duration {
+    let target_ns = object.extension_headers
+        .get(TARGET_PLAYTIME_TYPE)
+        .and_then(|kvp| kvp.bytes_value())
+        .map(|bytes| {
+            let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
+            i64::from_be_bytes(arr)
+        })
+        .unwrap_or(0);
+    
+    let adjusted_target = target_ns - OUTPUT_LATENCY_NS;
+    
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    
+    let wait_ns = adjusted_target - now_ns;
+    
+    if wait_ns > 0 {
+        Duration::from_nanos(wait_ns as u64)
+    } else {
+        Duration::ZERO // Late frame, play immediately
+    }
+}
+```
 
-## Option 2: Track-Relative Timestamps (hang)
+### B.3. Wire Encoding Example
 
-Using existing hang container timestamps (relative microseconds):
+For TARGET_PLAYTIME = 1708234567890123456 ns (2024-02-18 02:36:07.890123456 UTC):
 
 ```
-play_time = first_frame_time + frame_offset + global_delay
+E2                // Type: 0xE2 (delta from 0)
+08                // Length: 8 bytes
+17 AC 3F 2D       // Timestamp (big-endian)...
+D5 04 12 30       // ...continued
+
+Total: 10 bytes on wire
 ```
-
-| Aspect | Evaluation |
-|--------|------------|
-| Precision | Microsecond - good |
-| Complexity | Low - no clock sync needed |
-| Relay impact | None - in payload |
-| Standardization | Already in hang spec |
-
-**Limitation**: Requires correlating track time to wall-clock time at session start.
-
-## Option 3: NTP/PTP External Sync
-
-Rely on external clock synchronization:
-
-| Aspect | Evaluation |
-|--------|------------|
-| Precision | Depends on NTP/PTP quality |
-| Complexity | High - infrastructure |
-| Relay impact | None |
-| Standardization | N/A - out of band |
-
-## Option 4: Hybrid Approach
-
-Combine TARGET_PLAYTIME with hang timestamps:
-- TARGET_PLAYTIME in first object of each group
-- hang timestamps for intra-group timing
-
-| Aspect | Evaluation |
-|--------|------------|
-| Precision | Best of both |
-| Complexity | Higher |
-| Bandwidth | Lower (one extension per group) |
-
----
-
-# Journal - Decision Points
-
-## For pipe2moq Implementation
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Type code | `0xE2` | In "standards, space less critical" range (64-16383) |
-| Time unit | Nanoseconds | Matches gstreamer/pipe2moq precision |
-| Encoding | Signed 64-bit BE | Full Unix timestamp range |
-| Scope | Object only | Per-frame precision needed |
-| Immutable | Yes | Via IMMUTABLE_EXTENSIONS if desired |
-
-## Open Questions
-
-1. **Should TARGET_PLAYTIME be wrapped in IMMUTABLE_EXTENSIONS?**
-   - Pro: Guarantees no modification
-   - Con: Adds nesting complexity
-   - Recommendation: Yes, for critical synchronization use cases
-
-2. **How to handle clock drift?**
-   - Consumer should track drift over time
-   - Could add DRIFT_CORRECTION extension for publisher updates
-   - Recommendation: Start with consumer-side drift tracking
-
-3. **What global delay value?**
-   - Audio conferencing: 100-300ms
-   - Live music: <50ms
-   - Recommendation: Configurable per-session
-
----
-
-# IANA Considerations
-
-This document requests registration of the following extension header in the "MOQ Extension Headers" registry:
-
-| Field | Value |
-|-------|-------|
-| Type | `0xE2` (226) |
-| Name | TARGET_PLAYTIME |
-| Scope | Object |
-| Specification | This document |
-| Repeatable | No |
-
----
-
-# Security Considerations
-
-1. **Clock manipulation**: Malicious publishers could set unreasonable timestamps
-   - Mitigation: Consumers should validate timestamps are within acceptable range
-
-2. **Replay attacks**: Old objects with past timestamps could be re-injected
-   - Mitigation: Consumers should reject timestamps too far in the past
-
-3. **Timing attacks**: Precise timestamps could reveal information about publisher
-   - Mitigation: Add small random jitter if privacy is critical
-
----
-
-# References
-
-## Normative References
-
-- [draft-ietf-moq-transport-16](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) - MoQ Transport
-- [draft-lcurley-moq-hang-01](https://www.ietf.org/archive/id/draft-lcurley-moq-hang-01.html) - Hang container format
-
-## Informative References
-
-- [RFC 9580](https://www.rfc-editor.org/rfc/rfc9580) - NTPv4
-- [IEEE 1588](https://standards.ieee.org/ieee/1588/6825/) - PTP
-- [WebCodecs](https://www.w3.org/TR/webcodecs/) - Browser codec API
-
----
-
-# Appendix A: Type Code Selection
-
-The type code `0xE2` (226) was selected because:
-
-1. Falls in range 64-16383 (0x40-0x3FFF) for standards utilization
-2. Not allocated in current IANA registry
-3. Odd number → Length-prefixed encoding (required for 8-byte value)
-4. Memorable hex value
-
-Alternative codes in same range: `0xC8`, `0xDC`, `0xF0`, etc.
-
----
-
-# Appendix B: Related Work
-
-## WebRTC
-
-WebRTC uses RTP with RTCP Sender Reports for clock synchronization:
-- NTP timestamp + RTP timestamp mapping
-- Requires RTCP traffic
-- Not applicable to MoQ architecture
-
-## HLS/DASH
-
-HTTP-based streaming uses:
-- Segment timing in manifests (PTS)
-- Wall-clock not embedded in segments
-- Assumes client clock sync via HTTP
-
-## NTP/PTP
-
-Network Time Protocol and Precision Time Protocol:
-- Separate infrastructure
-- Microsecond (NTP) to nanosecond (PTP) precision
-- TARGET_PLAYTIME assumes loosely synchronized clocks (~10ms)
