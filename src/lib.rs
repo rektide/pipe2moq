@@ -1,13 +1,16 @@
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{error, info, debug, warn};
 use url::Url;
+
+pub const TARGET_PLAYTIME_EXTENSION_TYPE: u64 = 0xE3;
 
 #[derive(Clone)]
 pub struct AudioConfig {
@@ -56,6 +59,7 @@ pub struct MoqConfig {
     pub relay_url: String,
     pub broadcast_path: String,
     pub track_name: String,
+    pub target_playtime_delay: Option<u64>,
 }
 
 impl Default for MoqConfig {
@@ -64,6 +68,7 @@ impl Default for MoqConfig {
             relay_url: "https://localhost:4443/anon".to_string(),
             broadcast_path: "/live/audio".to_string(),
             track_name: "audio".to_string(),
+            target_playtime_delay: None,
         }
     }
 }
@@ -265,6 +270,11 @@ impl Pipe2Moq {
 
         let mut track_producer = broadcast.create_track(audio_track);
 
+        let target_playtime_delay_ns = config.target_playtime_delay.map(|ms| ms * 1_000_000);
+        if target_playtime_delay_ns.is_some() {
+            info!("TARGET_PLAYTIME enabled: {}ms delay", config.target_playtime_delay.unwrap());
+        }
+
         info!("Publishing broadcast {} with track {}",
               config.broadcast_path, config.track_name);
 
@@ -275,8 +285,23 @@ impl Pipe2Moq {
                 info!("Published {} frames", frame_count);
             }
 
+            let frame_data = if let Some(delay_ns) = target_playtime_delay_ns {
+                let now_ns = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("System time before Unix epoch")
+                    .as_nanos() as i64;
+                let target_playtime = now_ns + delay_ns as i64;
+
+                let mut frame = BytesMut::with_capacity(8 + data.len());
+                frame.extend_from_slice(&target_playtime.to_be_bytes());
+                frame.extend_from_slice(&data);
+                frame.freeze()
+            } else {
+                data
+            };
+
             let mut group = track_producer.append_group();
-            group.write_frame(data);
+            group.write_frame(frame_data);
             group.close();
         }
 

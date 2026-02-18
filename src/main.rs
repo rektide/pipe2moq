@@ -45,6 +45,9 @@ struct Args {
 
     #[arg(long, action)]
     verbose: bool,
+
+    #[arg(long)]
+    target_playtime: Option<Option<u64>>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,6 +168,7 @@ async fn main() -> Result<()> {
         relay_url,
         broadcast_path,
         track_name,
+        target_playtime_delay: args.target_playtime.map(|v| v.unwrap_or(160)),
     };
 
     let app = Pipe2Moq::new(pipeline_config, moq_config);
