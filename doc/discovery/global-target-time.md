@@ -14,11 +14,12 @@ This is an application-defined extension header specification. It is not part of
 
 Media over QUIC Transport (MOQT) is a publish/subscribe protocol for media distribution. The base protocol uses relative timestamps embedded in media containers (e.g., the hang container format) for presentation timing. However, relative timestamps require correlation between track time and wall-clock time, which complicates synchronized multi-consumer scenarios.
 
-This document defines the TARGET_PLAYTIME extension header, which carries an absolute Unix epoch timestamp indicating when a media object should be presented. This enables:
+This document defines the TARGET_PLAYTIME extension header, which carries an absolute Unix epoch timestamp indicating when a Group of media objects should begin playback. This enables:
 
 - **Synchronized playback**: Multiple consumers play at the same wall-clock time
-- **Fixed global delay**: Publishers set a common delay buffer
+- **Fixed global delay**: Publishers set a common delay buffer  
 - **Per-consumer calibration**: Each consumer accounts for its own output latency
+- **Efficient signaling**: One timestamp per Group rather than per Object
 
 ---
 
@@ -28,19 +29,22 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 This document uses terminology from [I-D.ietf-moq-transport], including:
 - **Object**: An addressable unit whose payload is a sequence of bytes
+- **Group**: A series of Objects delivered in order until closed or cancelled
 - **Original Publisher**: The initial publisher of a given track
 - **Relay**: An entity that is both a Publisher and a Subscriber
 
 Additional terms defined by this document:
-- **Target Playtime**: The absolute wall-clock time when an object's payload should be presented to the output device
+- **Target Playtime**: The absolute wall-clock time when a Group's playback should begin
 
 ---
 
 ## 3. TARGET_PLAYTIME Extension Header
 
-The TARGET_PLAYTIME extension (Extension Header Type 0xE3) is an Object Extension. It expresses the absolute wall-clock time in nanoseconds since the Unix epoch when the media object should be presented to the output device.
+The TARGET_PLAYTIME extension (Extension Header Type 0xE3) is an Object Extension. It expresses the absolute wall-clock time in nanoseconds since the Unix epoch when the Group should begin playback.
 
 TARGET_PLAYTIME only applies to Objects, not Tracks.
+
+TARGET_PLAYTIME is OPTIONAL. When present, it SHOULD appear only on the first Object of a Group, establishing the wall-clock anchor time for that Group. Subsequent Objects within the same Group use relative timing based on their sequence within the Group or container-level timestamps.
 
 ### 3.1. Wire Format
 
@@ -60,27 +64,42 @@ TARGET_PLAYTIME {
 
 ### 3.2. Semantics
 
-The TARGET_PLAYTIME indicates the absolute wall-clock time when this object's payload should be presented to the output device (e.g., speakers for audio, display for video).
+The TARGET_PLAYTIME indicates the absolute wall-clock time when playback of this Group should begin.
 
-**Publishers** set TARGET_PLAYTIME to the capture time plus a fixed global delay:
+#### 3.2.1. Group-Level Timing
+
+TARGET_PLAYTIME establishes a wall-clock anchor for an entire Group:
+
+- **First Object**: If TARGET_PLAYTIME is present on the first Object of a Group, it specifies when that Group's playback begins.
+- **Subsequent Objects**: Objects within the same Group that follow the first Object SHOULD NOT include TARGET_PLAYTIME. They play in sequence using their natural frame duration or container-level timestamps relative to the Group's anchor.
+
+This design minimizes overhead (one timestamp per Group rather than per Object) while maintaining precise synchronization.
+
+**Publishers** set TARGET_PLAYTIME on the first Object of each Group:
 
 ```
 target_playtime = capture_time + global_delay
 ```
 
 Where:
-- `capture_time`: Wall-clock time when media was captured
-- `global_delay`: Application-defined buffer (e.g., 200ms)
+- `capture_time`: Wall-clock time when the Group's first frame was captured
+- `global_delay`: Application-defined buffer (e.g., 160ms)
 
-**Consumers** use TARGET_PLAYTIME to determine playback timing:
+**Consumers** use TARGET_PLAYTIME to determine Group playback timing:
 
 ```
-wait_duration = target_playtime - output_latency - current_time
+group_start_time = target_playtime - output_latency
 ```
 
-Where:
-- `output_latency`: Consumer's hardware output latency (e.g., 10ms speaker latency)
-- `current_time`: Consumer's current wall-clock time
+Objects within the Group play at:
+```
+object_play_time = group_start_time + object_relative_offset
+```
+
+Where `object_relative_offset` is derived from:
+- Container-level timestamps (e.g., hang microseconds header)
+- Natural frame duration × object index within Group
+- Application-specific timing metadata
 
 Consumers SHOULD implement jitter buffering based on TARGET_PLAYTIME values to handle network latency variations.
 
@@ -94,7 +113,12 @@ A Track is considered malformed (see Section 2.4.2 of [I-D.ietf-moq-transport]) 
 * TARGET_PLAYTIME Length field is not exactly 8 bytes.
 * The Timestamp bytes cannot be decoded as a valid signed 64-bit integer.
 
-This extension is optional. Publishers that do not support TARGET_PLAYTIME will not include it. Consumers that do not support TARGET_PLAYTIME MUST ignore it and rely on container-level timestamps if available.
+This extension is OPTIONAL. Publishers that do not support TARGET_PLAYTIME will not include it. Consumers that do not support TARGET_PLAYTIME MUST ignore it and rely on container-level timestamps if available.
+
+When TARGET_PLAYTIME is used, it SHOULD appear only on the first Object of a Group. Consumers that receive TARGET_PLAYTIME on non-first Objects within a Group MAY:
+- Use the timestamp as a new anchor for subsequent Objects
+- Ignore it and continue using the Group's initial anchor
+- Treat it as an error condition
 
 ### 3.4. Processing Rules
 
@@ -164,15 +188,16 @@ This document requests registration of the following extension header in the "MO
 
 ## Appendix A. Example Usage
 
-### A.1. Publisher Implementation (Rust)
+### A.1. Publisher Implementation (Rust) - Group Level
 
 ```rust
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TARGET_PLAYTIME_TYPE: u64 = 0xE3;
-const GLOBAL_DELAY_NS: i64 = 200_000_000; // 200ms
+const GLOBAL_DELAY_NS: i64 = 160_000_000; // 160ms
 
-fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
+// Called once per Group, on the first Object only
+fn create_group_with_target_playtime(first_frame: Vec<u8>) -> Vec<u8> {
     let capture_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -180,18 +205,16 @@ fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
     
     let target_playtime = capture_ns + GLOBAL_DELAY_NS;
     
-    let mut ext_headers = ExtensionHeaders::new();
-    ext_headers.set_bytesvalue(
-        TARGET_PLAYTIME_TYPE,
-        target_playtime.to_be_bytes().to_vec()
-    );
-    
-    SubgroupObjectExt {
-        object_id_delta: 0,
-        extension_headers: ext_headers,
-        payload_length: payload.len(),
-        status: None,
-    }
+    // Prepend TARGET_PLAYTIME to first frame of group
+    let mut payload = Vec::with_capacity(8 + first_frame.len());
+    payload.extend_from_slice(&target_playtime.to_be_bytes());
+    payload.extend_from_slice(&first_frame);
+    payload
+}
+
+// Subsequent frames in the group are sent without TARGET_PLAYTIME
+fn create_continuation_frame(frame: Vec<u8>) -> Vec<u8> {
+    frame // Just the Opus payload, no TARGET_PLAYTIME
 }
 ```
 
@@ -199,46 +222,68 @@ fn create_frame_with_target_playtime(payload: Vec<u8>) -> SubgroupObjectExt {
 
 ```rust
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 
 const TARGET_PLAYTIME_TYPE: u64 = 0xE3;
 const OUTPUT_LATENCY_NS: i64 = 10_000_000; // 10ms speaker latency
+const FRAME_DURATION_NS: i64 = 20_000_000; // 20ms for Opus at 48kHz
 
-fn process_frame(object: SubgroupObjectExt) -> Duration {
-    let target_ns = object.extension_headers
-        .get(TARGET_PLAYTIME_TYPE)
-        .and_then(|kvp| kvp.bytes_value())
-        .map(|bytes| {
-            let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
-            i64::from_be_bytes(arr)
-        })
-        .unwrap_or(0);
+struct GroupPlayback {
+    anchor_time: i64,  // TARGET_PLAYTIME from first object
+    object_index: i64,
+}
+
+fn process_group_first_object(payload: &[u8]) -> (GroupPlayback, &[u8]) {
+    // First 8 bytes are TARGET_PLAYTIME
+    let anchor_ns = i64::from_be_bytes(payload[..8].try_into().unwrap());
+    let audio_data = &payload[8..];
     
-    let adjusted_target = target_ns - OUTPUT_LATENCY_NS;
+    let group = GroupPlayback {
+        anchor_time: anchor_ns - OUTPUT_LATENCY_NS,
+        object_index: 0,
+    };
+    
+    (group, audio_data)
+}
+
+fn schedule_playback(group: &GroupPlayback, audio_data: &[u8]) -> std::time::Duration {
+    let play_time = group.anchor_time + (group.object_index * FRAME_DURATION_NS);
     
     let now_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos() as i64;
     
-    let wait_ns = adjusted_target - now_ns;
+    let wait_ns = play_time - now_ns;
     
     if wait_ns > 0 {
-        Duration::from_nanos(wait_ns as u64)
+        std::time::Duration::from_nanos(wait_ns as u64)
     } else {
-        Duration::ZERO // Late frame, play immediately
+        std::time::Duration::ZERO // Late frame, play immediately
     }
 }
 ```
 
 ### A.3. Wire Encoding Example
 
-For TARGET_PLAYTIME = 1708234567890123456 ns (2024-02-18 02:36:07.890123456 UTC):
+For a Group starting at TARGET_PLAYTIME = 1708234567890123456 ns (2024-02-18 02:36:07.890123456 UTC):
 
+**First Object of Group (with TARGET_PLAYTIME):**
 ```
 E3                // Type: 0xE3 (delta from 0)
 08                // Length: 8 bytes
 17 AC 3F 2D       // Timestamp (big-endian)...
 D5 04 12 30       // ...continued
+[Opus frame 0]    // Audio payload
 
-Total: 10 bytes on wire
+Total: 10 + payload bytes
 ```
+
+**Subsequent Objects in Group (no TARGET_PLAYTIME):**
+```
+[Opus frame 1]    // Audio payload only
+[Opus frame 2]    // Audio payload only
+...
+```
+
+The consumer plays frame 0 at TARGET_PLAYTIME, frame 1 at TARGET_PLAYTIME + 20ms, frame 2 at TARGET_PLAYTIME + 40ms, etc.
